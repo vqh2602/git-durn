@@ -29,10 +29,27 @@ class GitExecutableLocator {
     }
 
     add(customExecutable);
+
+    // Search directories in system PATH
+    final pathEnv = Platform.environment['PATH'];
+    if (pathEnv != null && pathEnv.isNotEmpty) {
+      final separator = Platform.isWindows ? ';' : ':';
+      final binaryName = Platform.isWindows ? 'git.exe' : 'git';
+      for (final dir in pathEnv.split(separator)) {
+        final trimmed = dir.trim();
+        if (trimmed.isEmpty) continue;
+        final candidatePath =
+            trimmed.endsWith(Platform.pathSeparator)
+                ? '$trimmed$binaryName'
+                : '$trimmed${Platform.pathSeparator}$binaryName';
+        add(candidatePath);
+      }
+    }
+
     if (Platform.isMacOS) {
-      add('/usr/bin/git');
-      add('/usr/local/bin/git');
       add('/opt/homebrew/bin/git');
+      add('/usr/local/bin/git');
+      add('/usr/bin/git');
     } else if (Platform.isWindows) {
       final programFiles = Platform.environment['ProgramFiles'];
       final programFilesX86 = Platform.environment['ProgramFiles(x86)'];

@@ -7,8 +7,25 @@ import '../data/git_repository_service.dart';
 import 'repository_picker.dart';
 import 'repository_tabs_controller.dart';
 
+class CustomGitExecutableNotifier extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void setPath(String? path) {
+    state = path;
+  }
+}
+
+final customGitExecutableProvider =
+    NotifierProvider<CustomGitExecutableNotifier, String?>(
+      CustomGitExecutableNotifier.new,
+    );
+
 final gitExecutableLocatorProvider = Provider<GitExecutableLocator>(
-  (ref) => const GitExecutableLocator(),
+  (ref) {
+    final customPath = ref.watch(customGitExecutableProvider);
+    return GitExecutableLocator(customExecutable: customPath);
+  },
 );
 
 final gitInstallationProvider = FutureProvider<GitInstallation?>((ref) {

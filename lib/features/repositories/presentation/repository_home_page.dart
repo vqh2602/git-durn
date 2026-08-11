@@ -1,3 +1,4 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -298,14 +299,16 @@ class _StartupScreen extends StatelessWidget {
   }
 }
 
-class _GitUnavailableScreen extends StatelessWidget {
+class _GitUnavailableScreen extends ConsumerWidget {
   const _GitUnavailableScreen({required this.onRetry, this.details});
 
   final VoidCallback onRetry;
   final String? details;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final customPath = ref.watch(customGitExecutableProvider);
+
     return Scaffold(
       body: Center(
         child: ConstrainedBox(
@@ -323,18 +326,51 @@ class _GitUnavailableScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 const Text(
-                  'Install Git or configure a custom executable before opening a repository.',
+                  'Install Git or configure a custom executable path before opening a repository.',
                   textAlign: TextAlign.center,
                 ),
+                if (customPath != null) ...<Widget>[
+                  const SizedBox(height: 10),
+                  Text(
+                    'Configured executable: $customPath',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
                 if (details != null) ...<Widget>[
                   const SizedBox(height: 10),
                   Text(details!, textAlign: TextAlign.center),
                 ],
                 const SizedBox(height: 20),
-                OutlinedButton.icon(
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Detect Again'),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  alignment: WrapAlignment.center,
+                  children: <Widget>[
+                    OutlinedButton.icon(
+                      onPressed: onRetry,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Detect Again'),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        final file = await openFile(
+                          confirmButtonText: 'Select Git Executable',
+                        );
+                        if (file != null) {
+                          ref
+                              .read(customGitExecutableProvider.notifier)
+                              .setPath(file.path);
+                          ref.invalidate(gitInstallationProvider);
+                        }
+                      },
+                      icon: const Icon(Icons.folder_open),
+                      label: const Text('Choose Git Executable'),
+                    ),
+                  ],
                 ),
               ],
             ),
