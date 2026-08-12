@@ -19,5 +19,10 @@ void main() {
     expect(database.listRecentRepositories().single.isFavorite, isTrue);
     database.removeRepository('/tmp/repository');
     expect(database.listRecentRepositories(), isEmpty);
+
+    database.writePreference('ai.selected_model', 'tiny');
+    expect(database.readPreference('ai.selected_model'), 'tiny');
+    database.deletePreference('ai.selected_model');
+    expect(database.readPreference('ai.selected_model'), isNull);
   });
 }

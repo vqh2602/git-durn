@@ -9,6 +9,7 @@ import '../../../core/storage/database.dart';
 import '../application/repository_providers.dart';
 import '../application/repository_tabs_controller.dart';
 import '../domain/repository_session.dart';
+import '../../settings/presentation/ai_settings_dialog.dart';
 import 'widgets/repository_workspace.dart';
 
 class RepositoryHomePage extends ConsumerWidget {
@@ -55,6 +56,10 @@ class _RepositoryShell extends ConsumerWidget {
               onOpen: controller.openRepository,
               onSelect: controller.select,
               onClose: controller.close,
+              onSettings: () => showDialog<void>(
+                context: context,
+                builder: (context) => const AiSettingsDialog(),
+              ),
             ),
             if (tabs.error case final error?)
               MaterialBanner(
@@ -119,12 +124,14 @@ class _TabBar extends StatelessWidget {
     required this.onOpen,
     required this.onSelect,
     required this.onClose,
+    required this.onSettings,
   });
 
   final RepositoryTabsState state;
   final VoidCallback onOpen;
   final ValueChanged<String> onSelect;
   final ValueChanged<String> onClose;
+  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -178,6 +185,11 @@ class _TabBar extends StatelessWidget {
             tooltip: 'Open repository',
             onPressed: state.isOpening ? null : onOpen,
             icon: const Icon(Icons.add, size: 20),
+          ),
+          IconButton(
+            tooltip: 'Settings · Local AI',
+            onPressed: onSettings,
+            icon: const Icon(Icons.settings_outlined, size: 19),
           ),
           const SizedBox(width: 4),
         ],

@@ -3,6 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/git/git_error.dart';
 import '../../../core/git/git_status.dart';
+import '../../../core/ai/ai_model_catalog.dart';
+import '../../../core/ai/ai_model_manager.dart';
+import '../../../core/ai/ai_models.dart';
+import '../../../core/ai/local_commit_ai_provider.dart';
 import '../../../core/git/repository_watcher.dart';
 import '../../commits/domain/commit_node.dart';
 import '../data/git_repository_service.dart';
@@ -27,6 +31,10 @@ class RepositoryWorkspaceController extends ChangeNotifier {
   String? operationLabel;
   String? lastSuccess;
   GitError? error;
+  bool isGeneratingCommit = false;
+  String aiStreamText = '';
+  GeneratedCommit? aiSuggestion;
+  String? aiError;
 
   void selectFile(GitFileStatus file, {required bool staged}) {
     selectedFile = file;
@@ -91,6 +99,43 @@ class RepositoryWorkspaceController extends ChangeNotifier {
       amend: amend,
     ),
   );
+
+  Future<void> generateCommitMessage() async {
+    if (isGeneratingCommit) return;
+    isGeneratingCommit = true;
+    aiStreamText = '';
+    aiSuggestion = null;
+    aiError = null;
+    notifyListeners();
+    try {
+      final manager = await ref.read(aiModelManagerProvider.future);
+      AiModelCatalogItem? model;
+      for (final candidate in aiModelCatalog) {
+        if (candidate.id == manager.selectedModelId) model = candidate;
+      }
+      if (model == null ||
+          manager.stateFor(model).phase != AiModelDownloadPhase.installed) {
+        throw StateError(
+          'Open Settings · Local AI, download and select a model first.',
+        );
+      }
+      final service = await ref.read(gitRepositoryServiceProvider.future);
+      final context = await service.readCommitAiContext(rootPath);
+      final provider = LocalCommitAiProvider(
+        modelPath: manager.modelPath(model),
+      );
+      await for (final token in provider.generateCommitStream(context)) {
+        aiStreamText += token;
+        notifyListeners();
+      }
+      aiSuggestion = GeneratedCommit.parse(aiStreamText);
+    } on Object catch (caught) {
+      aiError = caught.toString();
+    } finally {
+      isGeneratingCommit = false;
+      notifyListeners();
+    }
+  }
 
   Future<void> fetch({bool all = false, bool prune = false}) => _run(
     'Fetching…',
@@ -212,6 +257,109 @@ class RepositoryWorkspaceController extends ChangeNotifier {
     (service) => service.markResolved(rootPath, file.path),
   );
 
+  Future<void> applySelectedPatch(String patch) => _run(
+    selectedFileStaged ? 'Unstaging selection…' : 'Staging selection…',
+    selectedFileStaged ? 'Selection unstaged' : 'Selection staged',
+    (service) => service.applyPartialPatch(
+      rootPath,
+      patch,
+      staged: true,
+      reverse: selectedFileStaged,
+    ),
+  );
+
+  Future<void> discardSelectedPatch(String patch) => _run(
+    'Creating recovery snapshot and discarding selected hunk…',
+    'Selected hunk discarded; recovery snapshot created',
+    (service) async {
+      final file = selectedFile;
+      if (file == null) return null;
+      await service.createRecoverySnapshot(rootPath, path: file.path);
+      await service.applyPartialPatch(
+        rootPath,
+        patch,
+        staged: false,
+        reverse: true,
+      );
+      return null;
+    },
+  );
+
+  Future<void> saveConflictResult(
+    GitFileStatus file,
+    String content, {
+    bool markResolvedAfterSave = false,
+  }) => _run(
+    'Saving conflict result…',
+    markResolvedAfterSave
+        ? 'Conflict saved and marked resolved'
+        : 'Conflict result saved',
+    (service) async {
+      await service.writeConflictResult(rootPath, file.path, content);
+      if (markResolvedAfterSave) {
+        await service.markResolved(rootPath, file.path);
+      }
+      return null;
+    },
+  );
+
+  Future<void> createWorktree({
+    required String path,
+    required String branch,
+    bool createBranch = false,
+  }) => _run(
+    'Creating worktree…',
+    'Worktree created',
+    (service) => service.createWorktree(
+      rootPath,
+      path: path,
+      branch: branch,
+      createBranch: createBranch,
+    ),
+  );
+
+  Future<void> setWorktreeLock(String path, {required bool locked}) => _run(
+    locked ? 'Locking worktree…' : 'Unlocking worktree…',
+    locked ? 'Worktree locked' : 'Worktree unlocked',
+    (service) => service.setWorktreeLock(rootPath, path, locked: locked),
+  );
+
+  Future<void> removeWorktree(String path) => _run(
+    'Removing worktree…',
+    'Worktree removed',
+    (service) => service.removeWorktree(rootPath, path),
+  );
+
+  Future<void> pruneWorktrees() => _run(
+    'Pruning worktrees…',
+    'Worktrees pruned',
+    (service) => service.pruneWorktrees(rootPath),
+  );
+
+  Future<void> updateSubmodules() => _run(
+    'Updating submodules recursively…',
+    'Submodules updated',
+    (service) => service.updateSubmodules(rootPath),
+  );
+
+  Future<void> syncSubmodules() => _run(
+    'Synchronizing submodules…',
+    'Submodules synchronized',
+    (service) => service.syncSubmodules(rootPath),
+  );
+
+  Future<void> lfsAction(String action, {String? pattern}) => _run(
+    'Running Git LFS $action…',
+    'Git LFS $action completed',
+    (service) => service.lfsAction(rootPath, action, pattern: pattern),
+  );
+
+  Future<void> applyPatch(String patch) => _run(
+    'Applying patch…',
+    'Patch applied',
+    (service) => service.applyPatch(rootPath, patch),
+  );
+
   Future<void> continueOperation() => _run(
     'Continuing Git operation…',
     'Git operation continued',
@@ -273,12 +421,22 @@ class RepositoryWorkspaceController extends ChangeNotifier {
     ref.invalidate(repositoryTagsProvider(rootPath));
     ref.invalidate(repositoryStashesProvider(rootPath));
     ref.invalidate(repositoryOperationStateProvider(rootPath));
+    ref.invalidate(repositoryWorktreesProvider(rootPath));
+    ref.invalidate(repositorySubmodulesProvider(rootPath));
+    ref.invalidate(repositoryLfsProvider(rootPath));
+    ref.invalidate(repositoryReflogProvider(rootPath));
     if (selectedFile case final file?) {
       ref.invalidate(
         repositoryDiffProvider((
           rootPath: rootPath,
           path: file.path,
           staged: selectedFileStaged,
+        )),
+      );
+      ref.invalidate(
+        repositoryConflictDocumentProvider((
+          rootPath: rootPath,
+          path: file.path,
         )),
       );
     }

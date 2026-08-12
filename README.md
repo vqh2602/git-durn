@@ -74,6 +74,12 @@ git_desktop_client/
 - ✅ Create/apply/pop/drop stashes; cherry-pick, revert, and soft/mixed/hard reset.
 - ✅ Detect in-progress merge/rebase/cherry-pick/revert operations and continue or abort them.
 - ✅ Embedded multi-session terminal backed by a real PTY and the user's shell.
+- ✅ Stage/unstage complete hunks or selected changed lines using generated patches passed to `git apply` over stdin.
+- ✅ Three-way conflict workspace with BASE/OURS/THEIRS panes, an editable RESULT, and per-block Ours/Theirs/Both/Neither actions.
+- ✅ Worktree management, recursive submodule update/sync, Git LFS tracking/actions, reflog recovery, file history, blame, and patch preview/apply.
+- ✅ GitHub/GitLab/Bitbucket hosting-provider abstraction; authenticated CLI JSON powers live pull-request and issue lists without storing hosting tokens.
+- ✅ Local AI model catalog and Settings UI, resumable HTTP Range downloads, `.part` persistence, exact-size and SHA-256 verification, and llama.cpp inference.
+- ✅ AI commit suggestions stream into a preview and require explicit Apply and Commit actions; staged context is bounded, noisy files are reported, and secrets are redacted.
 - ✅ Native macOS lifecycle behavior: standalone release launch, close/reopen, and app activation.
 
 ---
@@ -142,9 +148,10 @@ flutter build windows --debug
 | **Branches & Remotes** | Branch/tag management, fetch/pull/push/merge/rebase | ✅ Completed |
 | **Stash & Recovery** | Stash lifecycle, operation continue/abort, safe confirmations | ✅ Completed |
 | **Terminal** | Real PTY, multiple sessions, resize and shell I/O | ✅ Completed |
-| **Advanced Editing** | Hunk/line staging and a three-way block conflict editor | 🚧 Next |
-| **Advanced Repository Tools** | Worktrees, submodules UI, LFS, reflog, blame, patch workflows | 🚧 Next |
-| **Hosting & AI** | GitHub/GitLab/Bitbucket PR/issues and configurable AI providers | 🚧 Next |
+| **Advanced Editing** | Hunk/line staging and a three-way block conflict editor | ✅ Completed |
+| **Advanced Repository Tools** | Worktrees, submodules UI, LFS, reflog, blame, patch workflows | ✅ Completed |
+| **Hosting** | GitHub/GitLab/Bitbucket provider abstraction with authenticated CLI PR/issues | ✅ Completed |
+| **Local AI** | Downloadable Qwen3 GGUF catalog, resumable downloads, llama.cpp generation, commit preview/apply | ✅ Completed |
 
 ---
 

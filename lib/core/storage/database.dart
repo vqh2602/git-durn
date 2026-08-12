@@ -53,6 +53,12 @@ class AppDatabase {
         is_favorite INTEGER NOT NULL DEFAULT 0
       )
     ''');
+    _database.execute('''
+      CREATE TABLE IF NOT EXISTS app_preferences (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    ''');
   }
 
   List<RecentRepository> listRecentRepositories({int limit = 30}) {
@@ -115,6 +121,28 @@ class AppDatabase {
       'UPDATE repositories SET is_favorite = ? WHERE path = ?',
       <Object?>[isFavorite ? 1 : 0, path],
     );
+  }
+
+  String? readPreference(String key) {
+    final rows = _database.select(
+      'SELECT value FROM app_preferences WHERE key = ?',
+      <Object?>[key],
+    );
+    return rows.isEmpty ? null : rows.first['value'] as String;
+  }
+
+  void writePreference(String key, String value) {
+    _database.execute(
+      'INSERT INTO app_preferences (key, value) VALUES (?, ?) '
+      'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      <Object?>[key, value],
+    );
+  }
+
+  void deletePreference(String key) {
+    _database.execute('DELETE FROM app_preferences WHERE key = ?', <Object?>[
+      key,
+    ]);
   }
 
   void close() => _database.close();

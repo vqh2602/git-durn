@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:path/path.dart' as p;
 
@@ -8,12 +9,16 @@ import '../../../core/git/git_error.dart';
 import '../../../core/git/git_process_runner.dart';
 import '../../../core/git/git_status.dart';
 import '../../../core/git/git_status_parser.dart';
+import '../../../core/ai/ai_models.dart';
+import '../../../core/security/secret_redactor.dart';
 import '../../branches/data/git_branch_parser.dart';
 import '../../branches/domain/branch_info.dart';
+import '../../advanced_repository/domain/repository_tools.dart';
 import '../../commits/data/git_log_parser.dart';
 import '../../commits/domain/commit_node.dart';
 import '../../conflicts/domain/repository_operation_state.dart';
 import '../../diff/domain/git_diff.dart';
+import '../../conflicts/domain/conflict_document.dart';
 import '../../stash/domain/stash_entry.dart';
 import '../domain/repository_session.dart';
 
@@ -177,6 +182,71 @@ class GitRepositoryService {
           text.contains('Binary files') ||
           text.contains('GIT binary patch') ||
           text == 'Binary or unreadable untracked file.',
+    );
+  }
+
+  Future<CommitAiContext> readCommitAiContext(String rootPath) async {
+    final status = await readStatus(rootPath);
+    final namesResult = await runner.runChecked(
+      GitCommand(
+        arguments: const <String>['diff', '--cached', '--name-only', '-z'],
+        workingDirectory: rootPath,
+        description: 'git diff --cached --name-only -z',
+      ),
+    );
+    final stagedFiles = namesResult.stdout
+        .split('\x00')
+        .where((path) => path.isNotEmpty)
+        .toList(growable: false);
+    if (stagedFiles.isEmpty) {
+      throw const GitError(
+        kind: GitErrorKind.unknown,
+        message: 'Stage changes before generating a commit message.',
+      );
+    }
+    final ignored = stagedFiles.where(
+      (path) => RegExp(
+        r'(?:^|/)(?:build|dist|vendor|generated)/|\.(?:lock|min\.js|min\.css)$',
+        caseSensitive: false,
+      ).hasMatch(path),
+    );
+    final included = stagedFiles.toSet()..removeAll(ignored);
+    final diffResult = await runner.runChecked(
+      GitCommand(
+        arguments: <String>[
+          'diff',
+          '--cached',
+          '--no-color',
+          '--no-ext-diff',
+          '--stat',
+          '--patch',
+          if (included.isNotEmpty) ...<String>['--', ...included],
+        ],
+        workingDirectory: rootPath,
+        description: 'git diff --cached --stat --patch <AI-context>',
+      ),
+    );
+    var diff = diffResult.stdout;
+    if (diff.length > 60000) {
+      diff = '${diff.substring(0, 60000)}\n<DIFF_TRUNCATED>';
+    }
+    final redaction = const SecretRedactor().redact(diff);
+    final recent = await runner.run(
+      GitCommand(
+        arguments: const <String>['log', '-10', '--format=%s'],
+        workingDirectory: rootPath,
+        description: 'git log -10 --format=%s',
+      ),
+    );
+    return CommitAiContext(
+      branch: status.branch.displayName,
+      stagedFiles: stagedFiles,
+      diff: redaction.text,
+      recentSubjects: recent.isSuccess
+          ? recent.stdout.split('\n').where((line) => line.isNotEmpty).toList()
+          : const <String>[],
+      omittedFiles: ignored.length,
+      redactedSecrets: redaction.redactedCount,
     );
   }
 
@@ -789,6 +859,444 @@ class GitRepositoryService {
 
   Future<void> markResolved(String rootPath, String path) =>
       stagePath(rootPath, path);
+
+  Future<void> applyPartialPatch(
+    String rootPath,
+    String patch, {
+    required bool staged,
+    bool reverse = false,
+  }) => _mutate(rootPath, () async {
+    if (patch.trim().isEmpty) {
+      throw const GitError(
+        kind: GitErrorKind.unknown,
+        message: 'Select at least one changed line or hunk.',
+      );
+    }
+    await runner.runChecked(
+      GitCommand(
+        arguments: <String>[
+          'apply',
+          '--unidiff-zero',
+          '--whitespace=nowarn',
+          if (staged) '--cached',
+          if (reverse) '--reverse',
+          '-',
+        ],
+        workingDirectory: rootPath,
+        description:
+            'git apply${staged ? ' --cached' : ''}${reverse ? ' --reverse' : ''} <selected-patch>',
+        stdin: utf8.encode(patch),
+      ),
+    );
+  });
+
+  Future<ConflictDocument> readConflictDocument(
+    String rootPath,
+    String path,
+  ) async {
+    Future<String> readStage(int stage) async {
+      final result = await runner.run(
+        GitCommand(
+          arguments: <String>['show', ':$stage:$path'],
+          workingDirectory: rootPath,
+          description: 'git show :$stage:<conflicted-path>',
+        ),
+      );
+      return result.isSuccess ? result.stdout : '';
+    }
+
+    final file = File(p.join(rootPath, path));
+    final bytes = file.existsSync() ? await file.readAsBytes() : <int>[];
+    final isBinary = bytes.take(8192).contains(0);
+    final result = isBinary ? '' : utf8.decode(bytes, allowMalformed: true);
+    final values = await Future.wait(<Future<String>>[
+      readStage(1),
+      readStage(2),
+      readStage(3),
+    ]);
+    return ConflictDocument(
+      path: path,
+      base: values[0],
+      ours: values[1],
+      theirs: values[2],
+      result: result,
+      blocks: isBinary
+          ? const <ConflictBlock>[]
+          : ConflictDocument.parseBlocks(result),
+      isBinary: isBinary,
+    );
+  }
+
+  Future<void> writeConflictResult(
+    String rootPath,
+    String path,
+    String content,
+  ) => _mutate(rootPath, () async {
+    final root = p.normalize(p.absolute(rootPath));
+    final target = p.normalize(p.absolute(p.join(root, path)));
+    if (!p.isWithin(root, target)) {
+      throw const GitError(
+        kind: GitErrorKind.unknown,
+        message: 'Conflict path is outside the repository.',
+      );
+    }
+    await File(target).writeAsString(content, flush: true);
+  });
+
+  Future<List<WorktreeInfo>> readWorktrees(String rootPath) async {
+    final result = await runner.runChecked(
+      GitCommand(
+        arguments: const <String>['worktree', 'list', '--porcelain'],
+        workingDirectory: rootPath,
+        description: 'git worktree list --porcelain',
+      ),
+    );
+    final output = <WorktreeInfo>[];
+    for (final record in result.stdout.trim().split(RegExp(r'\n\s*\n'))) {
+      if (record.trim().isEmpty) continue;
+      final values = <String, String>{};
+      final flags = <String>{};
+      for (final line in record.split('\n')) {
+        final space = line.indexOf(' ');
+        if (space == -1) {
+          flags.add(line.trim());
+        } else {
+          values[line.substring(0, space)] = line.substring(space + 1);
+        }
+      }
+      output.add(
+        WorktreeInfo(
+          path: values['worktree'] ?? '',
+          head: values['HEAD'] ?? '',
+          branch: values['branch']?.replaceFirst('refs/heads/', ''),
+          isBare: flags.contains('bare'),
+          isDetached: flags.contains('detached'),
+          isLocked: flags.contains('locked') || values.containsKey('locked'),
+          lockReason: values['locked'],
+        ),
+      );
+    }
+    return List<WorktreeInfo>.unmodifiable(output);
+  }
+
+  Future<void> createWorktree(
+    String rootPath, {
+    required String path,
+    required String branch,
+    bool createBranch = false,
+  }) => _mutate(
+    rootPath,
+    () => runner.runChecked(
+      GitCommand(
+        arguments: <String>[
+          'worktree',
+          'add',
+          if (createBranch) ...<String>['-b', branch],
+          path,
+          if (!createBranch) branch,
+        ],
+        workingDirectory: rootPath,
+        description:
+            'git worktree add${createBranch ? ' -b <branch>' : ''} <path>',
+      ),
+    ),
+  );
+
+  Future<void> setWorktreeLock(
+    String rootPath,
+    String path, {
+    required bool locked,
+  }) => _mutate(
+    rootPath,
+    () => runner.runChecked(
+      GitCommand(
+        arguments: <String>['worktree', locked ? 'lock' : 'unlock', path],
+        workingDirectory: rootPath,
+        description: 'git worktree ${locked ? 'lock' : 'unlock'} <path>',
+      ),
+    ),
+  );
+
+  Future<void> removeWorktree(String rootPath, String path) => _mutate(
+    rootPath,
+    () => runner.runChecked(
+      GitCommand(
+        arguments: <String>['worktree', 'remove', path],
+        workingDirectory: rootPath,
+        description: 'git worktree remove <path>',
+      ),
+    ),
+  );
+
+  Future<void> pruneWorktrees(String rootPath) => _mutate(
+    rootPath,
+    () => runner.runChecked(
+      GitCommand(
+        arguments: const <String>['worktree', 'prune'],
+        workingDirectory: rootPath,
+        description: 'git worktree prune',
+      ),
+    ),
+  );
+
+  Future<List<SubmoduleInfo>> readSubmodules(String rootPath) async {
+    final result = await runner.run(
+      GitCommand(
+        arguments: const <String>['submodule', 'status', '--recursive'],
+        workingDirectory: rootPath,
+        description: 'git submodule status --recursive',
+      ),
+    );
+    if (!result.isSuccess) return const <SubmoduleInfo>[];
+    final entries = <SubmoduleInfo>[];
+    for (final line in result.stdout.split('\n')) {
+      if (line.length < 42) continue;
+      final stateCharacter = line[0];
+      final remainder = line.substring(42);
+      final descriptionStart = remainder.lastIndexOf(' (');
+      final path = descriptionStart < 0
+          ? remainder.trim()
+          : remainder.substring(0, descriptionStart).trim();
+      entries.add(
+        SubmoduleInfo(
+          path: path,
+          commit: line.substring(1, 41),
+          state: switch (stateCharacter) {
+            '-' => 'not initialized',
+            '+' => 'different commit',
+            'U' => 'conflicted',
+            _ => 'ready',
+          },
+          description: descriptionStart < 0
+              ? null
+              : remainder.substring(descriptionStart + 2).replaceFirst(')', ''),
+        ),
+      );
+    }
+    return List<SubmoduleInfo>.unmodifiable(entries);
+  }
+
+  Future<void> updateSubmodules(
+    String rootPath, {
+    bool initialize = true,
+    bool recursive = true,
+  }) => _mutate(
+    rootPath,
+    () => runner.runChecked(
+      GitCommand(
+        arguments: <String>[
+          'submodule',
+          'update',
+          if (initialize) '--init',
+          if (recursive) '--recursive',
+        ],
+        workingDirectory: rootPath,
+        description:
+            'git submodule update${initialize ? ' --init' : ''}${recursive ? ' --recursive' : ''}',
+      ),
+    ),
+  );
+
+  Future<void> syncSubmodules(String rootPath) => _mutate(
+    rootPath,
+    () => runner.runChecked(
+      GitCommand(
+        arguments: const <String>['submodule', 'sync', '--recursive'],
+        workingDirectory: rootPath,
+        description: 'git submodule sync --recursive',
+      ),
+    ),
+  );
+
+  Future<LfsStatus> readLfsStatus(String rootPath) async {
+    final version = await runner.run(
+      GitCommand(
+        arguments: const <String>['lfs', 'version'],
+        workingDirectory: rootPath,
+        description: 'git lfs version',
+      ),
+    );
+    if (!version.isSuccess) {
+      return const LfsStatus(isInstalled: false, patterns: <String>[]);
+    }
+    final attributes = File(p.join(rootPath, '.gitattributes'));
+    final patterns = <String>[];
+    if (attributes.existsSync()) {
+      for (final line in await attributes.readAsLines()) {
+        if (line.contains('filter=lfs')) patterns.add(line.split(' ').first);
+      }
+    }
+    return LfsStatus(
+      isInstalled: true,
+      patterns: List<String>.unmodifiable(patterns),
+    );
+  }
+
+  Future<void> lfsAction(String rootPath, String action, {String? pattern}) =>
+      _mutate(
+        rootPath,
+        () => runner.runChecked(
+          GitCommand(
+            arguments: <String>['lfs', action, ?pattern],
+            workingDirectory: rootPath,
+            description:
+                'git lfs $action${pattern == null ? '' : ' <pattern>'}',
+            timeout: const Duration(minutes: 30),
+          ),
+        ),
+      );
+
+  Future<List<ReflogEntry>> readReflog(
+    String rootPath, {
+    int limit = 200,
+  }) async {
+    const separator = '\x1f';
+    final result = await runner.runChecked(
+      GitCommand(
+        arguments: <String>[
+          'reflog',
+          'show',
+          '--date=iso-strict',
+          '--max-count=$limit',
+          '--format=%gD$separator%H$separator%h$separator%gs$separator%cI',
+        ],
+        workingDirectory: rootPath,
+        description: 'git reflog show --max-count=$limit --format=<structured>',
+      ),
+    );
+    return List<ReflogEntry>.unmodifiable(
+      result.stdout.split('\n').where((line) => line.isNotEmpty).map((line) {
+        final fields = line.split(separator);
+        return ReflogEntry(
+          selector: fields[0],
+          hash: fields.length > 1 ? fields[1] : '',
+          shortHash: fields.length > 2 ? fields[2] : '',
+          subject: fields.length > 3 ? fields[3] : '',
+          date: fields.length > 4 ? DateTime.tryParse(fields[4]) : null,
+        );
+      }),
+    );
+  }
+
+  Future<List<BlameLine>> readBlame(
+    String rootPath,
+    String path, {
+    bool ignoreWhitespace = false,
+  }) async {
+    final result = await runner.runChecked(
+      GitCommand(
+        arguments: <String>[
+          'blame',
+          '--line-porcelain',
+          if (ignoreWhitespace) '-w',
+          '--',
+          path,
+        ],
+        workingDirectory: rootPath,
+        description:
+            'git blame --line-porcelain${ignoreWhitespace ? ' -w' : ''} -- <path>',
+      ),
+    );
+    final authors = <String, String>{};
+    final times = <String, DateTime?>{};
+    final output = <BlameLine>[];
+    String hash = '';
+    var finalLine = 0;
+    for (final line in result.stdout.split('\n')) {
+      final header = RegExp(
+        r'^([0-9a-f^]{40,41}) \d+ (\d+)(?: \d+)?$',
+      ).firstMatch(line);
+      if (header != null) {
+        hash = header.group(1)!.replaceFirst('^', '');
+        finalLine = int.parse(header.group(2)!);
+      } else if (line.startsWith('author ')) {
+        authors[hash] = line.substring(7);
+      } else if (line.startsWith('author-time ')) {
+        final seconds = int.tryParse(line.substring(12));
+        times[hash] = seconds == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
+      } else if (line.startsWith('\t')) {
+        output.add(
+          BlameLine(
+            lineNumber: finalLine,
+            hash: hash,
+            author: authors[hash] ?? 'Unknown',
+            date: times[hash],
+            content: line.substring(1),
+          ),
+        );
+      }
+    }
+    return List<BlameLine>.unmodifiable(output);
+  }
+
+  Future<List<CommitNode>> readFileHistory(
+    String rootPath,
+    String path, {
+    int limit = 200,
+  }) async {
+    final format = <String>[
+      '%H',
+      '%h',
+      '%P',
+      '%an',
+      '%ae',
+      '%aI',
+      '%s',
+      '%b',
+      '%D',
+    ].join(GitLogParser.fieldSeparator);
+    final result = await runner.runChecked(
+      GitCommand(
+        arguments: <String>[
+          'log',
+          '--follow',
+          '--max-count=$limit',
+          '--format=$format${GitLogParser.recordSeparator}',
+          '--',
+          path,
+        ],
+        workingDirectory: rootPath,
+        description: 'git log --follow -- <path>',
+      ),
+    );
+    return logParser.parse(result.stdout);
+  }
+
+  Future<String> createPatchFromCommit(String rootPath, String commit) async {
+    final result = await runner.runChecked(
+      GitCommand(
+        arguments: <String>['format-patch', '--stdout', '-1', commit],
+        workingDirectory: rootPath,
+        description: 'git format-patch --stdout -1 <commit>',
+      ),
+    );
+    return result.stdout;
+  }
+
+  Future<String> createWorkingTreePatch(String rootPath) async {
+    final result = await runner.runChecked(
+      GitCommand(
+        arguments: const <String>['diff', '--binary', 'HEAD'],
+        workingDirectory: rootPath,
+        description: 'git diff --binary HEAD',
+      ),
+    );
+    return result.stdout;
+  }
+
+  Future<void> applyPatch(String rootPath, String patch) => _mutate(
+    rootPath,
+    () => runner.runChecked(
+      GitCommand(
+        arguments: const <String>['apply', '--3way', '-'],
+        workingDirectory: rootPath,
+        description: 'git apply --3way <patch>',
+        stdin: utf8.encode(patch),
+      ),
+    ),
+  );
 
   Future<void> continueOperation(
     String rootPath,

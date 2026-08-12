@@ -2,12 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../app/theme/app_theme.dart';
+import '../../../../core/ai/ai_models.dart';
 import '../../../../core/git/git_executable_locator.dart';
 import '../../../../core/git/git_status.dart';
 import '../../../branches/domain/branch_info.dart';
+import '../../../advanced_repository/presentation/advanced_repository_dialog.dart';
+import '../../../ai_assistant/presentation/ai_commit_suggestion_dialog.dart';
+import '../../../hosting/presentation/hosting_dialog.dart';
 import '../../../commits/domain/commit_node.dart';
 import '../../../conflicts/domain/repository_operation_state.dart';
+import '../../../conflicts/presentation/conflict_editor_dialog.dart';
 import '../../../diff/domain/git_diff.dart';
+import '../../../diff/presentation/hunk_diff_view.dart';
 import '../../../stash/domain/stash_entry.dart';
 import '../../../terminal/presentation/repository_terminal_panel.dart';
 import '../../application/repository_providers.dart';
@@ -66,6 +72,17 @@ class _RepositoryWorkspaceState extends ConsumerState<RepositoryWorkspace> {
           stashes: stashes,
           onCreateBranch: () => _showCreateBranch(context, controller),
           onCreateTag: () => _showCreateTag(context, controller),
+          onOpenAdvancedTools: () => showDialog<void>(
+            context: context,
+            builder: (context) => AdvancedRepositoryDialog(
+              rootPath: rootPath,
+              controller: controller,
+            ),
+          ),
+          onOpenHosting: () => showDialog<void>(
+            context: context,
+            builder: (context) => HostingDialog(rootPath: rootPath),
+          ),
           onToggleTerminal: () =>
               setState(() => _terminalVisible = !_terminalVisible),
           terminalVisible: _terminalVisible,
@@ -139,6 +156,7 @@ class _RepositoryWorkspaceState extends ConsumerState<RepositoryWorkspace> {
                           onAmendChanged: (value) =>
                               setState(() => _amend = value),
                           onCommit: () => _commit(controller),
+                          onGenerate: () => _generateCommit(controller),
                         ),
                       },
                     ),
@@ -171,6 +189,17 @@ class _RepositoryWorkspaceState extends ConsumerState<RepositoryWorkspace> {
       setState(() => _amend = false);
     }
   }
+
+  Future<void> _generateCommit(RepositoryWorkspaceController controller) async {
+    final suggestion = await showDialog<GeneratedCommit>(
+      context: context,
+      builder: (context) =>
+          AiCommitSuggestionDialog(controller: controller, conventional: true),
+    );
+    if (suggestion == null) return;
+    _summaryController.text = suggestion.summary(conventional: true);
+    _descriptionController.text = suggestion.body;
+  }
 }
 
 class _Toolbar extends StatelessWidget {
@@ -181,6 +210,8 @@ class _Toolbar extends StatelessWidget {
     required this.stashes,
     required this.onCreateBranch,
     required this.onCreateTag,
+    required this.onOpenAdvancedTools,
+    required this.onOpenHosting,
     required this.onToggleTerminal,
     required this.terminalVisible,
   });
@@ -191,6 +222,8 @@ class _Toolbar extends StatelessWidget {
   final AsyncValue<List<StashEntry>> stashes;
   final VoidCallback onCreateBranch;
   final VoidCallback onCreateTag;
+  final VoidCallback onOpenAdvancedTools;
+  final VoidCallback onOpenHosting;
   final VoidCallback onToggleTerminal;
   final bool terminalVisible;
 
@@ -337,6 +370,16 @@ class _Toolbar extends StatelessWidget {
             icon: Icons.sell_outlined,
             label: 'Tag',
             onPressed: controller.isBusy ? null : onCreateTag,
+          ),
+          _ToolbarButton(
+            icon: Icons.build_outlined,
+            label: 'Tools',
+            onPressed: controller.isBusy ? null : onOpenAdvancedTools,
+          ),
+          _ToolbarButton(
+            icon: Icons.cloud_outlined,
+            label: 'PRs & Issues',
+            onPressed: controller.isBusy ? null : onOpenHosting,
           ),
           const Spacer(),
           if (status.value case final value?)
@@ -980,6 +1023,20 @@ class _DiffPanel extends ConsumerWidget {
                   style: TextStyle(color: context.gitTheme.danger),
                 ),
                 const Spacer(),
+                TextButton.icon(
+                  onPressed: controller.isBusy
+                      ? null
+                      : () => showDialog<void>(
+                          context: context,
+                          builder: (context) => ConflictEditorDialog(
+                            rootPath: rootPath,
+                            file: file,
+                            controller: controller,
+                          ),
+                        ),
+                  icon: const Icon(Icons.compare_arrows, size: 16),
+                  label: const Text('Open 3-Way Editor'),
+                ),
                 TextButton(
                   onPressed: controller.isBusy
                       ? null
@@ -1005,7 +1062,13 @@ class _DiffPanel extends ConsumerWidget {
           child: diff.when(
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, stackTrace) => _PanelError(error: error),
-            data: (value) => _UnifiedDiffView(diff: value),
+            data: (value) => HunkDiffView(
+              diff: value,
+              onApplyPatch: controller.applySelectedPatch,
+              onDiscardPatch: controller.selectedFileStaged
+                  ? null
+                  : controller.discardSelectedPatch,
+            ),
           ),
         ),
       ],
@@ -1013,6 +1076,8 @@ class _DiffPanel extends ConsumerWidget {
   }
 }
 
+// Retained as the plain unified renderer for a future viewer-mode switch.
+// ignore: unused_element
 class _UnifiedDiffView extends StatelessWidget {
   const _UnifiedDiffView({required this.diff});
 
@@ -1108,6 +1173,7 @@ class _CommitEditorPanel extends StatelessWidget {
     required this.busy,
     required this.onAmendChanged,
     required this.onCommit,
+    required this.onGenerate,
   });
 
   final AsyncValue<RepositoryStatus> status;
@@ -1117,6 +1183,7 @@ class _CommitEditorPanel extends StatelessWidget {
   final bool busy;
   final ValueChanged<bool> onAmendChanged;
   final VoidCallback onCommit;
+  final VoidCallback onGenerate;
 
   @override
   Widget build(BuildContext context) {
@@ -1174,6 +1241,12 @@ class _CommitEditorPanel extends StatelessWidget {
                   : (value) => onAmendChanged(value ?? false),
               title: const Text('Amend previous commit'),
             ),
+            OutlinedButton.icon(
+              onPressed: busy || stagedCount == 0 ? null : onGenerate,
+              icon: const Icon(Icons.auto_awesome, size: 17),
+              label: const Text('Generate with Local AI'),
+            ),
+            const SizedBox(height: 8),
             FilledButton.icon(
               onPressed: busy || stagedCount == 0 ? null : onCommit,
               icon: const Icon(Icons.commit, size: 18),

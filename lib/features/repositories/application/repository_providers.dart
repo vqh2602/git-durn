@@ -2,6 +2,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
 import '../../../core/storage/database.dart';
+import '../../../core/ai/ai_model_manager.dart';
+import '../../advanced_repository/domain/repository_tools.dart';
+import '../../conflicts/domain/conflict_document.dart';
 import '../../../core/git/git_executable_locator.dart';
 import '../../../core/git/git_process_runner.dart';
 import '../../../core/git/git_status.dart';
@@ -78,6 +81,13 @@ final recentRepositoriesProvider = FutureProvider<List<RecentRepository>>((
   return database.listRecentRepositories();
 });
 
+final aiModelManagerProvider = FutureProvider<AiModelManager>((ref) async {
+  final database = await ref.watch(appDatabaseProvider.future);
+  final manager = await AiModelManager.open(database);
+  ref.onDispose(manager.dispose);
+  return manager;
+});
+
 typedef RepositoryDiffRequest = ({String rootPath, String path, bool staged});
 
 final repositoryDiffProvider =
@@ -130,6 +140,81 @@ final repositoryOperationStateProvider =
       final service = await ref.watch(gitRepositoryServiceProvider.future);
       return service.readOperationState(rootPath);
     });
+
+typedef ConflictDocumentRequest = ({String rootPath, String path});
+
+final repositoryConflictDocumentProvider =
+    FutureProvider.family<ConflictDocument, ConflictDocumentRequest>((
+      ref,
+      request,
+    ) async {
+      final service = await ref.watch(gitRepositoryServiceProvider.future);
+      return service.readConflictDocument(request.rootPath, request.path);
+    });
+
+final repositoryWorktreesProvider =
+    FutureProvider.family<List<WorktreeInfo>, String>((ref, rootPath) async {
+      final service = await ref.watch(gitRepositoryServiceProvider.future);
+      return service.readWorktrees(rootPath);
+    });
+
+final repositorySubmodulesProvider =
+    FutureProvider.family<List<SubmoduleInfo>, String>((ref, rootPath) async {
+      final service = await ref.watch(gitRepositoryServiceProvider.future);
+      return service.readSubmodules(rootPath);
+    });
+
+final repositoryLfsProvider = FutureProvider.family<LfsStatus, String>((
+  ref,
+  rootPath,
+) async {
+  final service = await ref.watch(gitRepositoryServiceProvider.future);
+  return service.readLfsStatus(rootPath);
+});
+
+final repositoryReflogProvider =
+    FutureProvider.family<List<ReflogEntry>, String>((ref, rootPath) async {
+      final service = await ref.watch(gitRepositoryServiceProvider.future);
+      return service.readReflog(rootPath);
+    });
+
+typedef RepositoryBlameRequest = ({
+  String rootPath,
+  String path,
+  bool ignoreWhitespace,
+});
+
+final repositoryBlameProvider =
+    FutureProvider.family<List<BlameLine>, RepositoryBlameRequest>((
+      ref,
+      request,
+    ) async {
+      final service = await ref.watch(gitRepositoryServiceProvider.future);
+      return service.readBlame(
+        request.rootPath,
+        request.path,
+        ignoreWhitespace: request.ignoreWhitespace,
+      );
+    });
+
+typedef RepositoryFileHistoryRequest = ({String rootPath, String path});
+
+final repositoryFileHistoryProvider =
+    FutureProvider.family<List<CommitNode>, RepositoryFileHistoryRequest>((
+      ref,
+      request,
+    ) async {
+      final service = await ref.watch(gitRepositoryServiceProvider.future);
+      return service.readFileHistory(request.rootPath, request.path);
+    });
+
+final repositoryWorkingPatchProvider = FutureProvider.family<String, String>((
+  ref,
+  rootPath,
+) async {
+  final service = await ref.watch(gitRepositoryServiceProvider.future);
+  return service.createWorkingTreePatch(rootPath);
+});
 
 final repositoryWorkspaceControllerProvider = ChangeNotifierProvider.autoDispose
     .family<RepositoryWorkspaceController, String>(
