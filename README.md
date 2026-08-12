@@ -58,16 +58,23 @@ git_desktop_client/
 
 ---
 
-## ⚡ Current Status: Phase 0 Completed
+## ⚡ Current Status: Functional Desktop Git Client
 
-### Implemented Capabilities:
-- ✅ Native **macOS** & **Windows** desktop target support.
-- ✅ Dynamic **System Git Detection**: Locates installed `git` executable and verifies compatibility/version.
-- ✅ **Safe Process Execution**: Timeout-aware command runner with typed errors (`GitError`) and sanitized environment variables.
-- ✅ **Porcelain v2 NUL Parser**: Robust parsing of working-tree status, file modifications, staged files, untracked/ignored items, renames, copies, and conflicts.
-- ✅ **Multi-Repository Workspace**: Open, switch between, and close multiple repository tabs independently.
-- ✅ **Responsive Desktop UI**: Adaptive multi-column layout (Working Tree, History Graph Foundation, Repository Details, Terminal Foundation).
-- ✅ **Dark Theme Integration**: Visual design tokens customized for developer desktop tools.
+### Implemented Capabilities
+
+- ✅ Open, initialize, and clone repositories (depth, single-branch, and submodule options).
+- ✅ Recent and favorite repositories persisted in SQLite, with multi-repository tabs.
+- ✅ System Git auto-detection plus a user-selected custom executable fallback.
+- ✅ Safe argument-vector process execution (`runInShell: false`), timeouts, typed errors, and a per-repository mutation queue.
+- ✅ Porcelain v2 status parsing, ahead/behind state, file watching, and automatic refresh.
+- ✅ Stage/unstage files or all changes, discard with a recovery snapshot, and conflict resolution using ours/theirs/mark-resolved.
+- ✅ Real unified diffs with line numbers, staged/unstaged views, untracked-file previews, and binary-file handling.
+- ✅ Commit and amend, commit history/details, decorations, and common commit actions.
+- ✅ Create/switch/delete/merge branches; create tags; fetch, pull, rebase, push, set upstream, push tags, and force-with-lease.
+- ✅ Create/apply/pop/drop stashes; cherry-pick, revert, and soft/mixed/hard reset.
+- ✅ Detect in-progress merge/rebase/cherry-pick/revert operations and continue or abort them.
+- ✅ Embedded multi-session terminal backed by a real PTY and the user's shell.
+- ✅ Native macOS lifecycle behavior: standalone release launch, close/reopen, and app activation.
 
 ---
 
@@ -125,22 +132,22 @@ flutter build windows --debug
 
 ---
 
-## 🗺 Feature Roadmap
+## 🗺 Feature Coverage
 
 | Phase | Module | Description | Status |
 | :--- | :--- | :--- | :---: |
-| **Phase 0** | **Core Foundation** | System Git process runner, Porcelain v2 parsing, Multi-tab UI layout | ✅ Completed |
-| **Phase 1** | **Staging & Discard** | File & line-level hunk staging, discard uncommitted changes | 🚧 Planned |
-| **Phase 2** | **Commit Engine** | Commit composer, GPG/SSH commit signing, smart message generator | 🚧 Planned |
-| **Phase 3** | **Commit Graph** | Interactive visual commit graph with topological branch rendering | 🚧 Planned |
-| **Phase 4** | **Branches & Remotes**| Branch switching/creation, Push, Fetch, Pull, Rebase, Merge & Conflict Editor | 🚧 Planned |
-| **Phase 5** | **Advanced Git** | Stash management, Submodules, Worktree isolated workspaces, Git LFS | 🚧 Planned |
-| **Phase 6** | **Integrations** | GitHub / GitLab / Bitbucket API integration (PRs, Issues, Code Review) | 🚧 Planned |
-| **Phase 7** | **Terminal & AI** | Built-in PTY terminal emulator & AI-assisted git workflow helper | 🚧 Planned |
+| **Core Foundation** | System Git process runner, Porcelain v2 parsing, SQLite metadata, multi-tab UI | ✅ Completed |
+| **Working Tree** | File staging, unstaging, discard/recovery, diffs, basic conflict resolution | ✅ Completed |
+| **Commit & History** | Commit/amend, history, details, decorations, commit actions | ✅ Completed |
+| **Branches & Remotes** | Branch/tag management, fetch/pull/push/merge/rebase | ✅ Completed |
+| **Stash & Recovery** | Stash lifecycle, operation continue/abort, safe confirmations | ✅ Completed |
+| **Terminal** | Real PTY, multiple sessions, resize and shell I/O | ✅ Completed |
+| **Advanced Editing** | Hunk/line staging and a three-way block conflict editor | 🚧 Next |
+| **Advanced Repository Tools** | Worktrees, submodules UI, LFS, reflog, blame, patch workflows | 🚧 Next |
+| **Hosting & AI** | GitHub/GitLab/Bitbucket PR/issues and configurable AI providers | 🚧 Next |
 
 ---
 
 ## 📄 License
 
 This project is open-source. See the repository configuration for details.
-

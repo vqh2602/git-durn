@@ -38,10 +38,9 @@ class GitExecutableLocator {
       for (final dir in pathEnv.split(separator)) {
         final trimmed = dir.trim();
         if (trimmed.isEmpty) continue;
-        final candidatePath =
-            trimmed.endsWith(Platform.pathSeparator)
-                ? '$trimmed$binaryName'
-                : '$trimmed${Platform.pathSeparator}$binaryName';
+        final candidatePath = trimmed.endsWith(Platform.pathSeparator)
+            ? '$trimmed$binaryName'
+            : '$trimmed${Platform.pathSeparator}$binaryName';
         add(candidatePath);
       }
     }

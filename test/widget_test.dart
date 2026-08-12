@@ -23,17 +23,17 @@ void main() {
               version: '2.40.0',
             ),
           ),
+          recentRepositoriesProvider.overrideWith((ref) async => const []),
         ],
         child: const GitDesktopApp(),
       ),
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Git Desktop'), findsOneWidget);
-    expect(find.text('Open a Git repository'), findsOneWidget);
-    expect(
-      find.widgetWithText(FilledButton, 'Open Repository'),
-      findsOneWidget,
-    );
+    expect(find.text('Git Desktop'), findsWidgets);
+    expect(find.text('Recent repositories'), findsOneWidget);
+    expect(find.text('Open Repository'), findsOneWidget);
+    expect(find.text('Clone Repository'), findsOneWidget);
+    expect(find.text('Initialize Repository'), findsOneWidget);
   });
 }
